@@ -3,4 +3,5 @@ articles_all
 data
 models
 tmp
+node_modules
 __pycache__

@@ -1,16 +1,19 @@
-from fastapi import FastAPI, UploadFile, File, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-from typing import List
+""" server class, implementing an API web server """
+
 import os
+import glob
 import yaml
-import shutil
-import uuid
-from sentence_transformers import SentenceTransformer
+#import shutil
+#import uuid
+import numpy as np
 import faiss
 import llama_cpp
-import glob
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, FileResponse
+from pydantic import BaseModel
+#from typing import List
+from sentence_transformers import SentenceTransformer
 from config import Config
 
 app = FastAPI()
@@ -26,96 +29,104 @@ metadata = []
 
 # Article Model
 class Article(BaseModel):
-    filename: str
-    url: str
-    title: str
-    author: str
-    source_url: str = ""
-    publishing_date: str
-    translator: str = ""
-    categories: str
-    contents: str
+  filename: str
+  url: str
+  title: str
+  author: str
+  source_url: str = ""
+  publishing_date: str
+  translator: str = ""
+  categories: str
+  contents: str
 
 class QueryRequest(BaseModel):
-    query: str
+  query: str
 
 # --- Utilities ---
 
 def save_article(article: Article):
-    path = os.path.join(Config.DATA_DIR, article.filename)
-    with open(path, 'w', encoding='utf-8') as f:
-        yaml.dump(article.dict(), f, allow_unicode=True)
+  path = os.path.join(Config.ARTICLES_LOCAL_FOLDER, article.filename)
+  with open(path, 'w', encoding='utf-8') as f:
+    yaml.dump(article.dict(), f, allow_unicode=True)
 
 def load_articles():
-    articles = []
-    for file_path in glob.glob(os.path.join(Config.DATA_DIR, "*.txt")):
-        with open(file_path, 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f)
-            articles.append(data)
-    return articles
+  articles = []
+  for file_path in glob.glob(os.path.join(Config.ARTICLES_LOCAL_FOLDER, "*.txt")):
+    with open(file_path, 'r', encoding='utf-8') as f:
+      data = yaml.safe_load(f)
+      articles.append(data)
+  return articles
 
 def chunk_text(text, size=Config.CHUNK_SIZE, overlap=Config.CHUNK_OVERLAP):
-    words = text.split()
-    chunks = []
-    for i in range(0, len(words), size - overlap):
-        chunk = ' '.join(words[i:i+size])
-        if chunk:
-            chunks.append(chunk)
-    return chunks
+  words = text.split()
+  chunks = []
+  for i in range(0, len(words), size - overlap):
+    chunk = ' '.join(words[i:i+size])
+    if chunk:
+      chunks.append(chunk)
+  return chunks
 
 def build_faiss_index():
-    global index, texts, metadata
-    articles = load_articles()
-    texts = []
-    metadata = []
-    embeddings = []
+  global index, texts, metadata
+  articles = load_articles()
+  texts = []
+  metadata = []
+  embeddings = []
 
-    for article in articles:
-        chunks = chunk_text(article['contents'])
-        for chunk in chunks:
-            texts.append(chunk)
-            metadata.append(article)
-            emb = embedding_model.encode(chunk)
-            embeddings.append(emb)
+  for article in articles:
+    chunks = chunk_text(article['contents'])
+    for chunk in chunks:
+      texts.append(chunk)
+      metadata.append(article)
+      emb = embedding_model.encode(chunk)
+      embeddings.append(emb)
 
-    dim = len(embeddings[0])
-    index = faiss.IndexFlatL2(dim)
-    index.add(np.array(embeddings).astype('float32'))
+  dim = len(embeddings[0])
+  index = faiss.IndexFlatL2(dim)
+  index.add(np.array(embeddings).astype('float32'))
 
 # --- API Routes ---
 
 @app.post("/import_articles")
 def import_articles(article: Article):
-    save_article(article)
-    return {"status": "imported", "filename": article.filename}
+  save_article(article)
+  return {"status": "imported", "filename": article.filename}
 
 @app.post("/build_index")
 def build_index():
-    build_faiss_index()
-    return {"status": "index built", "items": len(texts)}
+  build_faiss_index()
+  return {"status": "index built", "items": len(texts)}
 
 @app.post("/query")
 def query_articles(req: QueryRequest):
-    if index is None:
-        return {"error": "Index not built yet"}
+  if index is None:
+    return {"error": "Index not built yet"}
 
-    query_vec = embedding_model.encode(req.query)
-    D, I = index.search(np.array([query_vec]), Config.FAISS_K_PROTOTYPE)
+  query_vec = embedding_model.encode(req.query)
+  _d, i = index.search(np.array([query_vec]), Config.FAISS_K_PROTOTYPE)
 
-    context_chunks = [texts[i] for i in I[0]]
-    context = "\n---\n".join(context_chunks)
-    prompt = f"Contesto:\n{context}\n\nDomanda:\n{req.query}\n\nRispondi in modo informato basandoti sul contesto."
+  context_chunks = [texts[j] for j in i[0]]
+  context = "\n---\n".join(context_chunks)
+  prompt = f"""
+Contesto:
+{context}
 
-    llm = llama_cpp.Llama(model_path=Config.MISTRAL_MODEL_PATH, n_ctx=4096, n_threads=6)
-    response = llm(prompt)
+Domanda:
+{req.query}
 
-    return {"response": response['choices'][0]['text'].strip()}
+Rispondi in modo informato basandoti sul contesto.
+"""
+
+  llm = llama_cpp.Llama(model_path = Config.MISTRAL_MODEL_PATH, n_ctx = 4096, n_threads = 6)
+  response = llm(prompt)
+
+  return {"response": response['choices'][0]['text'].strip()}
 
 @app.get("/favicon.ico")
 def favicon():
-    return FileResponse("assets/images/favicon.png")
+  return FileResponse("assets/images/favicon.png")
 
 @app.get("/", response_class=HTMLResponse)
 def web_ui():
-    with open("index.html", encoding="utf-8") as f:
-        return HTMLResponse(content=f.read())
+  with open("index.html", encoding="utf-8") as f:
+    return HTMLResponse(content=f.read())
