@@ -10,11 +10,11 @@
   </head>
   <body>
     <div>
-      <input type="text" id="query" placeholder="Come posso aiutarti?">
+      <input type="text" id="query" size="40" placeholder="Come posso aiutarti?">
       <button onclick="ask()">=></button>
     </div>
-    <div id="loading" style="margin-top: 10px"></div>
-    <pre id="result"></pre>
+    <div id="result" style="margin: 10px"></div>
+    <div id="loading" style="margin: 10px"></div>
     <script>
       async function ask() {
         const q = document.getElementById("query").value;
@@ -27,7 +27,7 @@
         });
         const data = await res.json();
         document.getElementById("loading").style.visibility = "hidden";
-        document.getElementById("loading").remove();
+        //document.getElementById("loading").remove();
         if (data.error) {
           document.getElementById("result").innerText += data.error;
         } else {
