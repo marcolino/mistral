@@ -1,0 +1,26 @@
+{
+  "name": "mistral",
+  "version": "1.0.0",
+  "description": "A project to add AI querying capabilities to a set of textual articles",
+  "main": "main.py",
+  "scripts": {
+    "start_old": "python main.py",
+    "start": "uvicorn server:app --reload --port 8008",
+    "test": "pytest",
+    "lint": "pylint *.py --indent-string='  '",
+    "requirements-refresh": "pipreqs ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/marcolino/mistral.git"
+  },
+  "keywords": [
+    "AI"
+  ],
+  "author": "Marco Solari",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/marcolino/mistral/issues"
+  },
+  "homepage": "https://github.com/marcolino/mistral#readme"
+}

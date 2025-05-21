@@ -1,0 +1,5 @@
+#[MESSAGES CONTROL]
+#disable=C0103,C0301
+
+# C0103 Constant name "xyz" doesn't conform to UPPER_CASE naming style (invalid-name)
+# C0301 Line too long (N/100) (line-too-long)

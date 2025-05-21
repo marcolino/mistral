@@ -1,0 +1,1 @@
+# A project to add Natural Language Query capabilities to a set of textual articles

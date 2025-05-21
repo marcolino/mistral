@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Mistral</title>
+    <link rel="stylesheet" href="/assets/styles/main.css">
+    <link rel="icon" href="/assets/images/favicon.png" type="image/png">
+  </head>
+  <body>
+    <div>
+      <input type="text" id="query" size="40" placeholder="Come posso aiutarti?">
+      <button onclick="ask()">=></button>
+    </div>
+    <div id="result" style="margin: 10px"></div>
+    <div id="loading" style="margin: 10px"></div>
+    <script>
+      async function ask() {
+        const q = document.getElementById("query").value;
+        document.getElementById("result").innerText = "";
+        document.getElementById("loading").style.visibility = "visible";
+        const res = await fetch("http://localhost:8008/query", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: q })
+        });
+        const data = await res.json();
+        document.getElementById("loading").style.visibility = "hidden";
+        //document.getElementById("loading").remove();
+        if (data.error) {
+          document.getElementById("result").innerText += data.error;
+        } else {
+          document.getElementById("result").innerText += data.response;
+        }
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,6 @@
+articles*
+data*
+models
+tmp
+node_modules
+__pycache__

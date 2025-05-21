@@ -1,0 +1,7 @@
+fastapi
+uvicorn[standard]
+sentence-transformers
+faiss-cpu
+llama-cpp-python
+pyyaml
+numpy
