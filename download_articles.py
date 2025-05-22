@@ -27,7 +27,7 @@ from config import Config
 
 # Setup logging
 ENV = os.getenv("ENV")
-LOG_LEVEL = logging.DEBUG if not ENV or ENV == "DEVEL" else logging.WARNING
+LOG_LEVEL = logging.INFO if not ENV or ENV == "DEV" else logging.WARNING
 logging.basicConfig(
   level = LOG_LEVEL,
   format = "🔵 %(asctime)s - %(levelname)s - %(message)s"
@@ -39,7 +39,7 @@ logger.info(f"Env is {ENV}")
 
 # Global State
 status = {}
-embedding_model = SentenceTransformer(Config.EMBEDDING_MODEL)
+articles = []
 
 # Force yaml dump a literal multiline string representation in "|" style
 def literal_str_representer(dumper, data):
@@ -48,32 +48,38 @@ def literal_str_representer(dumper, data):
   return dumper.represent_scalar('tag:yaml.org,2002:str', data)
 yaml.add_representer(str, literal_str_representer)
 
-def download_all_articles(n):
+def articles_download():
   """Download all articles in a number."""
+  status = data_load()
+  try:
+    n = status["last_article_number"]
+  except KeyError:
+    n = 0
 
+  m = 0
   while True:
     n += 1
     target_url = Config.ARTICLES_SOURCE_URL_PATTERN % n
-    html, base_url = download_articles_index(target_url) # Download the index page for the current article number
+    html, base_url = articles_download_index(target_url) # Download the index page for the current article number
     if html:
       links = parse_html(html, base_url)
       count = len(links)
-      logger.info(f"Number: {n}, links: {count}")
-      # if n >= 400: # TODO: DEBUG ONLY!
-      #   break
+      #logger.debug(f"Number: {n}, links: {count}")
       if count > 0:
-        download_links(links, n)
+        m += 1
+        links_download(links, n)
       else:
         n = n - 1 # we ignore the last article, "in preparazione" ...
         break
     else:
       break
-  #status["last_article_number"] = n
-  #data_dump(status)
-  logger.info(f"Finished downloading {n} articles from {Config.ARTICLES_SOURCE_URL_BASE}")
-  return n
 
-def download_articles_index(url):
+  status["last_article_number"] = n
+  data_dump(status)
+
+  logger.info(f"Downloaded {m} new articles from {Config.ARTICLES_SOURCE_URL_BASE}")
+
+def articles_download_index(url):
   """Download the HTML content of all articles in a number."""
   try:
     os.makedirs(Config.ARTICLES_LOCAL_FOLDER, exist_ok = True)
@@ -107,25 +113,29 @@ def parse_html(html, base_url):
           links.add(full_url)
   return links
 
-def download_links(links, n):
-  """Download the articles from the extracted links."""
+def links_download(links, n):
+  """Download the new articles from the links extracted from the article index."""
   for link in links:
-    try:
-      # Get path and filename from the link
-      categories_and_filename = link.replace(f"{Config.ARTICLES_SOURCE_URL_BASE}/{Config.ARTICLES_SOURCE_URL_PATH}/", '')
-      categories = categories_and_filename.split('/') # Get the categories from the link
-      filename = categories.pop() # Build the filename from the categories
+    if any(article.get('url') == link for article in articles): # Skip articles already downloaded
+      logger.info(f"Skipped existing {link}")
+    else:
+      try:
+        # Get path and filename from the link
+        categories_and_filename = link.replace(f"{Config.ARTICLES_SOURCE_URL_BASE}/{Config.ARTICLES_SOURCE_URL_PATH}/", '')
+        categories = categories_and_filename.split('/') # Get the categories from the link
+        filename = categories.pop() # Build the filename from the categories
 
-      filename = f"{"_".join(categories)}_{filename}"
-      basename, ext = os.path.splitext(filename)
-      filename = basename + Config.ARTICLES_LOCAL_EXTENSION # Change the extension
-      filepath = os.path.join(Config.ARTICLES_LOCAL_FOLDER, filename)
+        filename = f"{"_".join(categories)}_{filename}"
+        basename, ext = os.path.splitext(filename)
+        filename = basename + Config.ARTICLES_LOCAL_EXTENSION # Change the extension
+        filepath = os.path.join(Config.ARTICLES_LOCAL_FOLDER, filename)
 
-      # Write file locally
+        # Download and dump article
 
-      # Check if article exists, or if we have to force overwrite
-      exists = os.path.exists(filepath)
-      if not exists or Config.ARTICLES_FORCE_OVERWRITE:
+        # Check if article exists #, or if we have to force overwrite
+        if os.path.exists(filepath): #or Config.ARTICLES_FORCE_OVERWRITE:
+          raise ValueError(f"Article at {filepath} exists already, but it's link {link} was not found in articles cache")
+
         try:
           # Download article
           # DEV ONLY: READ FILE FROM FILE SYSTEM OR FROM THE INTERNET ###########################################
@@ -145,21 +155,22 @@ def download_links(links, n):
           continue
 
         article = convert_to_text(response, n)
-        try: # Dump article to disk
+        try: # Dump article
           with open(filepath, 'w', encoding = Config.ARTICLES_LOCAL_ENCODING) as f:
             yaml.dump(article, f, allow_unicode = True, sort_keys = False)
         except Exception as e:
           logger.error(e)
           continue
 
-        if not exists:
-          logger.info(f"Downloaded: {link}")
-        else:
-          logger.info(f"Downloaded and overwritten {link}")
-      else:
-        logger.info(f"Skipped: {link}")
-    except Exception as e:
-      logger.error(e)
+        logger.info(f"Downloaded {link}")
+        #if not exists:
+        #  logger.info(f"Downloaded {link}")
+        #else:
+        #  logger.info(f"Downloaded and overwritten {link}")
+        
+      except Exception as e:
+        logger.error(e)
+        raise
 
 def convert_to_text(response, n):
   # Browsers treat charset=iso-8859-1 encoding as Windows-1252.
@@ -218,7 +229,7 @@ def convert_to_text(response, n):
       try:
         date = datetime.strptime(date, "%d-%m-%y").strftime("%Y-%m-%d")
       except ValueError:
-        logger.debug(f"Unforeseen date format: {date}")
+        logger.info(f"Unforeseen date format: {date}")
         # Ignore error and keep the original date
         pass
       date_publishing_resistenze = date
@@ -348,43 +359,51 @@ def html_to_text(html, tag_name = None):
   text = tag.get_text(separator = "\n", strip = True)
   return text
 
+def articles_load():
+  """Load articles data."""
+  global articles
+  #new_files = []
+
+  logger.info(f"Loading articles")
+
+  if not os.path.exists(Config.ARTICLES_PATH):
+    raise ValueError(f"Articles not found at {Config.ARTICLES_PATH}")
+
+  with open(Config.ARTICLES_PATH, 'rb') as f:
+    articles = pickle.load(f)
+  # else:
+  #   #logger.info(f"Loading articles...")
+  #   pattern = os.path.join(Config.ARTICLES_LOCAL_FOLDER, f"*{Config.ARTICLES_LOCAL_EXTENSION}")
+  #   files = glob.glob(pattern)
+  #   with tqdm(total = len(files)) as pbar:
+  #     #for file_path in glob.glob(os.path.join(Config.ARTICLES_LOCAL_FOLDER, f"*{Config.ARTICLES_LOCAL_EXTENSION}")):
+  #     for file_path in files:
+  #       try:
+  #         #if mtime > last_updated:
+  #         with open(file_path, 'r', encoding = Config.ARTICLES_LOCAL_ENCODING) as f:
+  #           article = yaml.safe_load(f)
+  #           if article:
+  #             article['__filepath'] = file_path
+  #             article['__mtime'] = datetime.fromtimestamp(os.path.getmtime(file_path))
+  #             articles.append(article)
+  #             new_files.append(file_path)
+  #           else:
+  #             logger.error(f"Void article found from {file_path}")
+  #             raise ValueError(f"Void article found from {file_path}")
+  #           pbar.set_description(f"Loaded article from file {Path(file_path).name.ljust(36)}")
+  #           pbar.update(1)
+  #       except Exception as e:
+  #         logger.error(f"Error reading {file_path}: {e}")
+  #         raise
+  #   with open(Config.ARTICLES_PATH, 'wb') as f: # Save articles
+  #     pickle.dump(articles, f)
+  # if not articles:
+  #   logger.warning("No new articles to index")
+  #   return 0
+
 def data_sync():
   """Sync data: faiss index, metadata and texts."""
-  global index, texts, metadata
-
-  #last_updated = get_article_last_updated_timestamp()
-  articles = []
-  new_files = []
-
-  logger.info(f"Syncing FAISS index, metadata and texts")
-
-  #logger.info(f"Loading articles...")
-  pattern = os.path.join(Config.ARTICLES_LOCAL_FOLDER, f"*{Config.ARTICLES_LOCAL_EXTENSION}")
-  files = glob.glob(pattern)
-  with tqdm(total = len(files)) as pbar:
-    #for file_path in glob.glob(os.path.join(Config.ARTICLES_LOCAL_FOLDER, f"*{Config.ARTICLES_LOCAL_EXTENSION}")):
-    for file_path in files:
-      try:
-        #if mtime > last_updated:
-        with open(file_path, 'r', encoding = Config.ARTICLES_LOCAL_ENCODING) as f:
-          article = yaml.safe_load(f)
-          if article:
-            article['__filepath'] = file_path
-            article['__mtime'] = datetime.fromtimestamp(os.path.getmtime(file_path))
-            articles.append(article)
-            new_files.append(file_path)
-          else:
-            logger.error(f"Void article found from {file_path}")
-            raise ValueError(f"Void article found from {file_path}")
-          pbar.set_description(f"Loaded article from file {Path(file_path).name.ljust(36)}")
-          pbar.update(1)
-      except Exception as e:
-        logger.error(f"Error reading {file_path}: {e}")
-        raise
-
-  if not articles:
-    logger.warning("No new articles to index")
-    return 0
+  embedding_model = SentenceTransformer(Config.EMBEDDING_MODEL)
 
   # Initialize or load existing data
   if all(os.path.exists(path) for path in [
@@ -392,14 +411,14 @@ def data_sync():
     Config.METADATA_PATH,
     Config.TEXTS_PATH
   ]):
-    logger.info("Loading existing data...")
+    logger.info("Syncing existing data from disk...")
     index = faiss.read_index(Config.FAISS_INDEX_PATH)
     with open(Config.METADATA_PATH, 'rb') as f:
       metadata = pickle.load(f)
     with open(Config.TEXTS_PATH, 'rb') as f:
       texts = pickle.load(f)
   else:
-    logger.info("Creating new data...")
+    logger.info("Syncing new data...")
     metadata = []
     texts = []
     dim = embedding_model.get_sentence_embedding_dimension()
@@ -411,13 +430,12 @@ def data_sync():
   new_texts = []
   new_metadata = []
 
-  with tqdm(total = len(articles), desc = "Indexing articles") as pbar:
+  total = Config.ARTICLES_MAX if Config.ARTICLES_MAX > 0 else len(articles)
+  with tqdm(total = total, desc = "Indexing articles") as pbar:
     for n, article in enumerate(articles):
       try:
         chunks = chunk_text(article['contents'])
-        #filename = os.path.basename(article.get('filename') or article.get('url') or 'unknown')
         filename = os.path.basename(article.get('__filepath'))
-        #logger.debug(f"Indexing [{n}/{len(articles)}]: {filename} ({len(chunks)} chunks)")
         new_article = False
 
         for chunk in chunks:
@@ -436,15 +454,18 @@ def data_sync():
             new_embeddings.append(embedding_model.encode(chunk))
         if new_article:
           new_articles += 1
-          pbar.set_description(f"Added chunks from article {n}")
-        else:
-          pbar.set_description(f"Skipped chunks from article {n} because already in texts")
+          pbar.set_description(f"Added chunks from article {1+n}")
         pbar.update(1)
+        if Config.ARTICLES_MAX > 0 and n >= Config.ARTICLES_MAX:
+          logger.info(f"Stopped indexing after {Config.ARTICLES_MAX} articles.")
+          break
 
       except Exception as e:
         logger.error(f"Error chunking article number {article["number"]} in file {article.get('__filepath')}: {e}")
         raise
-
+      finally:
+        pbar.close()
+        
   if new_embeddings:
     # Add new data to existing structures
     texts.extend(new_texts)
@@ -452,14 +473,13 @@ def data_sync():
     embeddings_array = np.array(new_embeddings).astype('float32')
     index.add(embeddings_array)
 
-    
     faiss.write_index(index, Config.FAISS_INDEX_PATH) # Save faiss index
     with open(Config.METADATA_PATH, 'wb') as f: # Save metadata
       pickle.dump(metadata, f)
     with open(Config.TEXTS_PATH, 'wb') as f: # Save texts
       pickle.dump(texts, f)
 
-    logger.info(f"Indexed {len(new_embeddings)} new chunks from {len(new_files)} files, in {new_articles} articles.")
+    logger.info(f"Indexed {len(new_embeddings)} new chunks from {new_articles} articles.")
   else:
     logger.info("No new articles to index")
   return len(new_embeddings)
@@ -475,17 +495,10 @@ def chunk_text(text, size = Config.CHUNK_SIZE, overlap = Config.CHUNK_OVERLAP):
 
 if __name__ == "__main__":
   try:
-    status = data_load()
-    try:
-      n = status["last_article_number"]
-    except KeyError:
-      n = 0
-    n = download_all_articles(n)
-    status["last_article_number"] = n
-    data_dump(status)
-    data_sync()
+    articles_load() # Load all existing articles (if any)
+    articles_download() # Download all new articles
+    data_sync() # Sync data (faiss index, metadata and texts)
     exit(0)
-
   except KeyboardInterrupt:
     logger.warning('Interrupted')
-    os._exit(130)
+    exit(130)

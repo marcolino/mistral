@@ -15,7 +15,7 @@ from typing import AsyncIterator
 from datetime import datetime, date
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
@@ -31,11 +31,10 @@ metadata = []
 
 # Setup logging
 ENV = os.getenv("ENV")
-LOG_LEVEL = logging.DEBUG if not ENV or ENV == "DEVEL" else logging.WARNING
+LOG_LEVEL = logging.DEBUG if not ENV or ENV == "DEV" else logging.WARNING # TODO: use a switch...
 logging.basicConfig(
   level = LOG_LEVEL,
   format = "🔵 %(asctime)s - %(levelname)s - %(message)s"
-  #format = "🔵 %(asctime)s %(levelname)s %(filename)s %(funcName)s %(lineno)d %(message)s"
 )
 logger = logging.getLogger(__name__)
 logger.info(f"Env is {ENV}")
@@ -47,7 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   
   # Initializations code
   status = data_load()
-  index_load()
+  data_sync()
 
   yield  # The application runs here
   
@@ -58,31 +57,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(lifespan = lifespan)
 
 @app.exception_handler(Exception)
-async def universal_exception_handler(request: Request, exc: Exception):
+async def universal_exception_handler(request: Request, e: Exception):
   return JSONResponse(
     status_code = 500,
     content = {
       "message": "Internal server error",
-      "detail": str(exc),
-      "type": exc.__class__.__name__,
+      "detail": str(e),
+      "type": e.__class__.__name__,
     }
   )
 
 # Mount the assets folder to make /assets/* available
 app.mount("/assets", StaticFiles(directory = "assets"), name = "assets")
 
-# Article Model - TODO: in separate file in models/ folder
-class Article(BaseModel):
-  filename: str = ""
-  url: str = ""
-  title: str = ""
-  author: str = ""
-  source_url: str = ""
-  publishing_date: None # TODO: ok?
-  translator: str = ""
-  categories: list = []
-  number: int = 0
-  contents: str = ""
+# # Article Model - TODO: in separate file in models/ folder
+# class Article(BaseModel):
+#   filename: str = ""
+#   url: str = ""
+#   title: str = ""
+#   author: str = ""
+#   source_url: str = ""
+#   publishing_date: None # TODO: ok?
+#   translator: str = ""
+#   categories: list = []
+#   number: int = 0
+#   contents: str = ""
 
 
 # QueryRequest Model - TODO: in separate file in models/ folder
@@ -94,7 +93,7 @@ class QueryRequest(BaseModel):
 
 # --- Utilities ---
 
-def index_load():
+def data_sync():
   global index, texts, metadata
   
   if all(os.path.exists(path) for path in [
@@ -110,9 +109,12 @@ def index_load():
       texts = pickle.load(f)
   else:
     logger.error("No existing index!")
-    raise
-
-
+    return JSONResponse(
+      status_code = 400,
+      content = {
+        "message": "No existing index!",
+      }
+    )
 
 # --- API Routes ---
 
@@ -120,7 +122,13 @@ def index_load():
 def download_articles():
   import download_articles
   count = download_articles.main()
-  return {"status": "downloaded", "articles_count": count}
+  return JSONResponse(
+    status_code = 200,
+    content = {
+      "message": "Downloaded",
+      "articles_count": count,
+    }
+  )
 
 # @app.post("/sync_index")
 # def sync_index():
@@ -130,23 +138,52 @@ def download_articles():
 @app.post("/query")
 def query_articles(req: QueryRequest):
   if index is None:
-    return {"error": "Index not built yet"}
+    return JSONResponse(
+      status_code = 400,
+      content = {
+        "message": "Index not built yet",
+      }
+    )
 
   logger.info(f"query: {req.query}")
-
+  
   # Retrieval from index
   query_vec = embedding_model.encode(req.query, show_progress_bar = False)
-  distances, indices = index.search(np.array([query_vec]), Config.FAISS_K_PROTOTYPE)
-
+  try:
+    distances, indices = index.search(
+      np.array([query_vec])
+      , Config.FAISS_K_PROTOTYPE
+    )
+  except Exception as e:
+    return JSONResponse(
+      status_code = 500,
+      content = {
+        "message": "Error searching index\
+ (probably the embedding model changed from the indexed one, it should be rebuilt)",
+        "detail": str(e),
+        "type": e.__class__.__name__,
+      }
+    )
+  
   # Filter and format context with error handling
   context_chunks = []
+  total_tokens = 0
+  max_tokens = Config.MAX_TOKENS_IN_CONTEXT
+
   for j, dist in zip(indices[0], distances[0]):
-    if dist < Config.DISTANCE_THRESHOLD:
+    print(dist)
+    if dist < Config.DISTANCE_THRESHOLD and total_tokens < max_tokens:
       try:
         # Safely access metadata
         meta = metadata[j] if j < len(metadata) else {}
         text = texts[j] if j < len(texts) else ""
         
+        # Estimate tokens (rough estimate: words × 1.3)
+        chunk_tokens = len(text.split()) * 1.3
+        if total_tokens + chunk_tokens > max_tokens:
+          continue
+        total_tokens += chunk_tokens
+
         # Format chunk
         context_chunks.append(
           f"Fonte: {meta.get('filename', 'sconosciuto')}\n"
@@ -154,16 +191,30 @@ def query_articles(req: QueryRequest):
           f"Estratto: {' '.join(text.split()[:150])}\n"
         )
       except Exception as e:
-        print(f"Error processing chunk {j}: {e}")
+        logger.error(f"Error processing chunk {j}: {e}")
         continue
+  logger.debug(f"--- total tokens in context: {total_tokens}")
 
   # Construct prompt
+  # prompt = f"""
+  #   Analizza questi documenti e rispondi in italiano CORRETTO.
+  #   Documenti: {"\n---\n".join(context_chunks)}
+  #   Domanda: {req.query}
+  #   Rispondi con frasi complete, basandoti SOLO sui documenti forniti sopra.
+  # """
   prompt = f"""
-    Analizza questi documenti e rispondi in italiano CORRETTO.
-    Documenti: {"\n---\n".join(context_chunks)}
-    Domanda: {req.query}
-    Rispondi con frasi complete, basandoti SOLO sui documenti forniti sopra.
-  """
+<context>
+{"\n\n".join(context_chunks)}
+</context>
+
+Sei un assistente per una rivista politica. Ti è stata posta questa domanda: "{req.query}"
+
+Risponde alla domanda basandoti SOLO sui documenti nel contesto sopra.
+Per rirspondere utilizza la lingua Italiana.
+Sii conciso e preciso.
+Se i documenti non contengono informazioni sufficienti per rispondere, dillo chiaramente.
+Se i documenti contengono informazioni sufficienti per rispondere, fornisci una risposta di massimo 3 frasi.
+"""
 
   # Load LLM model - TODO: use Config
   try:
@@ -180,22 +231,39 @@ def query_articles(req: QueryRequest):
       last_n_tokens_size   How many tokens to remember for repetition penalty              64, 128
       verbose              Logs internal behavior (set False to reduce console clutter)    True / False
     """
+    # llm = llama_cpp.Llama(
+    #   model_path = Config.MISTRAL_MODEL_PATH,
+    #   n_ctx = 32768, #4096,
+    #   chat_format = "llama-2",
+    #   #n_threads = 8,
+    #   # n_batch = 128,
+    #   # top_k = 40,
+    #   # top_p = 0.95,
+    #   repeat_penalty = 1.5,
+    #   # last_n_tokens_size = 128,
+    #   stop = [], # empty list means no stop tokens
+    #   temperature = 0.2,
+    #   verbose = False,
+    # )
     llm = llama_cpp.Llama(
       model_path = Config.MISTRAL_MODEL_PATH,
-      n_ctx = 32768, #4096,
-      chat_format = "llama-2",
-      #n_threads = 8,
-      # n_batch = 128,
-      # top_k = 40,
-      # top_p = 0.95,
-      repeat_penalty = 1.5,
-      # last_n_tokens_size = 128,
-      stop = [], # empty list means no stop tokens
-      temperature = 0.2,
+      n_ctx = 8192, # More reasonable context size
+      n_batch = 512, # Increase batch for faster processing
+      n_threads = 8, # Use most of your cores
+      n_gpu_layers = 0, # Explicitly set to 0 for CPU-only
+      temperature = 0.1, # More deterministic for factual answers
+      repeat_penalty = 1.1, # Less aggressive penalty
       verbose = False,
     )
   except Exception as e:
-    return {"error loading LLM:": str(e)}
+    return JSONResponse(
+      status_code = 500,
+      content = {
+        "message": "Error loading LLM",
+        "detail": str(e),
+        "type": e.__class__.__name__,
+      }
+    )
 
   # Generate response - TODO: use Config
   try:
@@ -203,18 +271,26 @@ def query_articles(req: QueryRequest):
     response = llm(
       prompt,
       #max_tokens = 768,
-      max_tokens = 256,
-      echo = False,
+      #max_tokens = Config.MAX_TOKENS
+      max_tokens = Config.MAX_TOKENS_IN_ANSWER,
+      echo = False, # TODO: False! WHAT DOES THIS DO? DEBUG?
+      stream = False, # Ensure we're not streaming unnecessarily
     )
     logger.debug(f"--- prompt: {prompt}")
     logger.debug(r"--- query llm: {%.1f} seconds ---" % (time.time() - start_time))
     logger.debug(f"--- finish reason: {response["choices"][0]["finish_reason"]} ---")
     answer = response['choices'][0]['text'].strip()
     logger.info(f"response to query: {answer}")
-    return {"response": response['choices'][0]['text'].strip()}
+    return {"response": answer}
   except Exception as e:
-    logger.error(f"error queryng LLM: {str(e)}")
-    return {"error": f"error queryng LLM: {str(e)}"}
+    logger.error(f"error queryng LLM: {str(e)}") # TODO: always logger.error before return 500 ?
+    return JSONResponse(
+      status_code = 500,
+      content = {
+        "message": "error queryng LLM",
+        "details": str(e),
+      }
+    )
 
 @app.get("/favicon.ico")
 def favicon():

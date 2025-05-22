@@ -38,15 +38,3 @@ def data_load(where = Config.STATUS_PATH):
     if (Config.mode == "dev"):
       logger.error(f"{traceback.format_exc()}")
     raise
-
-# def get_article_last_updated_timestamp():
-#   # Read file with faiss index last update timestamp
-#   last_updated_path = Config.FAISS_INDEX_LAST_SYNC_DATETIME_PATH
-#   os.makedirs(os.path.dirname(Config.FAISS_INDEX_PATH), exist_ok = True)
-#   if os.path.exists(last_updated_path):
-#     with open(last_updated_path, "r", encoding = Config.ARTICLES_LOCAL_ENCODING) as f:
-#       last_updated_str = f.read().strip()
-#       last_updated = datetime.datetime.strptime(last_updated_str, "%Y-%m-%d %H:%M:%S")
-#   else:
-#     last_updated = datetime.datetime.min
-#   return last_updated

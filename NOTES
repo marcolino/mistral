@@ -1,0 +1,37 @@
+# HuggingFace Models Naming
+
+A model filename like mistral-7b-instruct-v0.2.Q4_K_M.gguf contains structured information describing:
+
+Model family, Size, Fine-tuning type, Version, Quantization format, File format
+
+In detail:
+
+🔹 mistral-7b-instruct-v0.2.Q4_K_M.gguf
+1. mistral
+Base model family, developed by Mistral AI.
+Could be: mistral, mixtral, codestral, etc.
+
+2. 7b
+Number of parameter
+I.e.: 7b = 7 billion parameters.
+
+3. instruct
+Indicates the model was fine-tuned for instruction-following (i.e., conversational use).
+Could be base, instruct, chat, etc.
+
+4. v0.2
+Version of the model weights or fine-tuning dataset.
+v0.2 is newer than v0.1, may include improvements or bug fixes.
+
+5. Q4_K_M
+This is the quantization format:
+Q4 means 4-bit quantization (a compression technique to reduce model size and inference cost).
+K and M are flavors of quantization (e.g., trade-offs in speed, accuracy, and compatibility):
+K often refers to grouped quantization.
+M is a variant used by the ggml/gguf inference engines (like llama.cpp).
+Other formats include: Q5_0, Q6_K, Q8_0, F16, etc.
+
+6. .gguf
+File format used by GGML-based runtimes (e.g., llama.cpp, llamafile, text-generation-webui).
+.gguf stands for "GGML Unified Format", the successor to .ggml.
+

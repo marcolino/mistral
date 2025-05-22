@@ -6,11 +6,12 @@
     <meta http-equiv="X-UA-Compatible" content="ie=edge">
     <title>Mistral</title>
     <link rel="stylesheet" href="/assets/styles/main.css">
+    <!-- TODO: increase font size -->
     <link rel="icon" href="/assets/images/favicon.png" type="image/png">
   </head>
   <body>
     <div>
-      <input type="text" id="query" size="40" placeholder="Come posso aiutarti?">
+      <input type="text" id="query" size="40" placeholder="Come posso aiutarti?"><!-- TODO: handle Enter to click button... -->
       <button onclick="ask()">=></button>
     </div>
     <div id="result" style="margin: 10px"></div>
@@ -28,7 +29,7 @@
         const data = await res.json();
         document.getElementById("loading").style.visibility = "hidden";
         //document.getElementById("loading").remove();
-        if (data.error) {
+        if (data.error) { // TODO: check status code, 200 or not...
           document.getElementById("result").innerText += data.error;
         } else {
           document.getElementById("result").innerText += data.response;
