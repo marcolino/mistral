@@ -7,16 +7,9 @@
     <title>Mistral</title>
     <link rel="stylesheet" href="/assets/styles/main.css">
     <link rel="icon" href="/assets/images/favicon.png" type="image/png">
-  </head>
-  <body>
-    <form onsubmit="ask(); return false">
-      <input type="text" id="query" size="40" placeholder="Come posso aiutarti?">
-      <button><span id="submit"> ► </span></button>
-      <div id="result"></div>
-      <div id="loading"></div>
-      <div id="info"></div>
-    </form>
     <script>
+      server_url = "http://localhost:8008/query";
+
       document.getElementById('query').addEventListener('keydown', event => {
         if (event.key === 'Enter') ask();
       });
@@ -26,16 +19,16 @@
         document.getElementById("info").innerHTML = "";
         document.getElementById("loading").style.visibility = "visible";
         try {
-          const res = await fetch("http://localhost:8008/query", {
+          const res = await fetch(server_url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ query: q })
           });
           //console.log("RES:", res);
           const data = await res.json();
-          console.log("DATA:", data);
+          //console.log("DATA:", data);
           if (!res.ok) {
-            console.error('Error in fetched data, response was:', res);
+            console.error('Errore del server, la risposta è stata:', res);
             document.getElementById("result").innerHTML += data.message;
             return false;
           } else {
@@ -44,8 +37,8 @@
             document.getElementById("info").innerHTML += "Motivo della conclusione: " + data.finish_reason + "<br />";
           }
         } catch (error) {
-          console.error('Error fetching data:', error);
-          document.getElementById("result").innerHTML += 'Error fetching data: ' + error.message;
+          console.error('Errore nella risposta:', error);
+          document.getElementById("result").innerHTML += 'Errore nella risposta: ' + error.message;
           return false;
         } finally {
           document.getElementById("loading").style.visibility = "hidden";
@@ -53,5 +46,14 @@
         return false; // prevents the form from actually submitting
       }
     </script>
+  </head>
+  <body>
+    <form onsubmit="ask(); return false">
+      <input type="text" id="query" size="40" placeholder="Come posso aiutarti?">
+      <button><span id="submit"> ► </span></button>
+      <div id="result"></div>
+      <div id="loading"></div>
+      <div id="info"></div>
+    </form>
   </body>
 </html>
