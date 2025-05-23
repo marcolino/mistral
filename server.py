@@ -146,7 +146,15 @@ def query_articles(req: QueryRequest):
     )
 
   logger.info(f"query: {req.query}")
-  
+
+  if not req.query:
+    return JSONResponse(
+      status_code = 400,
+      content = {
+        "message": "Query is empty",
+      }
+    )
+
   # Retrieval from index
   query_vec = embedding_model.encode(req.query, show_progress_bar = False)
   try:
@@ -164,36 +172,89 @@ def query_articles(req: QueryRequest):
         "type": e.__class__.__name__,
       }
     )
+
+  # Print all distances - TODO: DEBUG ONLY
+  logger.debug(f"<DBG> distances retrieved from index: {distances[0]}")
   
   # Filter and format context with error handling
   context_chunks = []
   total_tokens = 0
   max_tokens = Config.MAX_TOKENS_IN_CONTEXT
 
-  for j, dist in zip(indices[0], distances[0]):
-    print(dist)
-    if dist < Config.DISTANCE_THRESHOLD and total_tokens < max_tokens:
-      try:
-        # Safely access metadata
-        meta = metadata[j] if j < len(metadata) else {}
-        text = texts[j] if j < len(texts) else ""
-        
-        # Estimate tokens (rough estimate: words × 1.3)
-        chunk_tokens = len(text.split()) * 1.3
-        if total_tokens + chunk_tokens > max_tokens:
-          continue
-        total_tokens += chunk_tokens
+  # Take top results regardless of absolute distance,
+  # but apply a relative threshold (only if the best result is reasonable)
+  valid_indices = []
+  if len(distances[0]) > 0:
+      best_distance = distances[0][0]
+      # If best result is reasonable (< 4.0), use relative threshold
+      if best_distance < 4.0:
+        logger.debug(f"<DBG> best distance is {best_distance}, good")
+        # Take results within 2x the best distance, or absolute threshold
+        relative_threshold = min(best_distance * 2.0, Config.DISTANCE_THRESHOLD)
+        valid_indices = [(j, dist) for j, dist in zip(indices[0], distances[0]) if dist <= relative_threshold]
+      else:
+        logger.debug(f"<DBG> best distance is {best_distance}, poor")
+        # If even best result is poor, take top 2 anyway
+        valid_indices = list(zip(indices[0][:2], distances[0][:2]))
+  
+  logger.debug(f"<DBG> Valid indices after filtering: {len(valid_indices)}")
 
-        # Format chunk
-        context_chunks.append(
-          f"Fonte: {meta.get('filename', 'sconosciuto')}\n"
-          f"Data: {meta.get('publishing_date', 'sconosciuta')}\n"
-          f"Estratto: {' '.join(text.split()[:150])}\n"
-        )
-      except Exception as e:
-        logger.error(f"Error processing chunk {j}: {e}")
+  for j, dist in valid_indices:
+    if total_tokens >= max_tokens:
+      break
+          
+    try:
+      # Safely access metadata
+      meta = metadata[j] if j < len(metadata) else {}
+      text = texts[j] if j < len(texts) else ""
+      
+      # Estimate tokens (rough estimate: words × 1.3)
+      chunk_tokens = len(text.split()) * 1.3
+      if total_tokens + chunk_tokens > max_tokens:
         continue
-  logger.debug(f"--- total tokens in context: {total_tokens}")
+      total_tokens += chunk_tokens
+
+      # Format chunk
+      context_chunks.append(
+        #f"Fonte: {meta.get('url', 'sconosciuto')}\n"
+        f"Titolo: {meta.get('title', 'sconosciuto')}\n" # Fixed: use 'title' not 'filename'
+        #f"Autore: {meta.get('author', 'sconosciuto')}\n"
+        f"Data: {meta.get('date', 'sconosciuta')}\n"
+        f"Distanza: {dist:.3f}\n" # Debug: show distance
+        f"Estratto: {' '.join(text.split()[:150])}\n"
+      )
+      logger.debug(f"<DBG> Added chunk with distance {dist:.3f}")
+    except Exception as e:
+      logger.error(f"Error processing chunk {j}: {e}")
+      continue
+  
+  logger.debug(f"<DBG> final context chunks: {len(context_chunks)}")
+  logger.debug(f"<DBG> total tokens: {total_tokens}")
+  
+  # for j, dist in zip(indices[0], distances[0]):
+  #   print(dist)
+  #   if dist < Config.DISTANCE_THRESHOLD and total_tokens < max_tokens:
+  #     try:
+  #       # Safely access metadata
+  #       meta = metadata[j] if j < len(metadata) else {}
+  #       text = texts[j] if j < len(texts) else ""
+        
+  #       # Estimate tokens (rough estimate: words × 1.3)
+  #       chunk_tokens = len(text.split()) * 1.3
+  #       if total_tokens + chunk_tokens > max_tokens:
+  #         continue
+  #       total_tokens += chunk_tokens
+
+  #       # Format chunk
+  #       context_chunks.append(
+  #         f"Fonte: {meta.get('filename', 'sconosciuto')}\n"
+  #         f"Data: {meta.get('publishing_date', 'sconosciuta')}\n"
+  #         f"Estratto: {' '.join(text.split()[:150])}\n"
+  #       )
+  #     except Exception as e:
+  #       logger.error(f"Error processing chunk {j}: {e}")
+  #       continue
+  # logger.debug(f"<DBG> total tokens in context: {total_tokens}")
 
   # Construct prompt
   # prompt = f"""
@@ -209,12 +270,14 @@ def query_articles(req: QueryRequest):
 
 Sei un assistente per una rivista politica. Ti è stata posta questa domanda: "{req.query}"
 
-Risponde alla domanda basandoti SOLO sui documenti nel contesto sopra.
-Per rirspondere utilizza la lingua Italiana.
-Sii conciso e preciso.
+Risponde alla domanda basandoti SOLO sui documenti nel contesto sopra (context).
+Cita SEMPRE il titolo (e non la data) del documento a cui ti riferisci.
 Se i documenti non contengono informazioni sufficienti per rispondere, dillo chiaramente.
-Se i documenti contengono informazioni sufficienti per rispondere, fornisci una risposta di massimo 3 frasi.
+Se i documenti contengono informazioni sufficienti per rispondere, fornisci una risposta di 4 frasi al massimo.
+Per rispondere utilizza SOLO la lingua Italiana.
+Sii preciso.
 """
+#Sii conciso e preciso.
 
   # Load LLM model - TODO: use Config
   try:
@@ -231,28 +294,14 @@ Se i documenti contengono informazioni sufficienti per rispondere, fornisci una 
       last_n_tokens_size   How many tokens to remember for repetition penalty              64, 128
       verbose              Logs internal behavior (set False to reduce console clutter)    True / False
     """
-    # llm = llama_cpp.Llama(
-    #   model_path = Config.MISTRAL_MODEL_PATH,
-    #   n_ctx = 32768, #4096,
-    #   chat_format = "llama-2",
-    #   #n_threads = 8,
-    #   # n_batch = 128,
-    #   # top_k = 40,
-    #   # top_p = 0.95,
-    #   repeat_penalty = 1.5,
-    #   # last_n_tokens_size = 128,
-    #   stop = [], # empty list means no stop tokens
-    #   temperature = 0.2,
-    #   verbose = False,
-    # )
     llm = llama_cpp.Llama(
       model_path = Config.MISTRAL_MODEL_PATH,
-      n_ctx = 8192, # More reasonable context size
-      n_batch = 512, # Increase batch for faster processing
-      n_threads = 8, # Use most of your cores
+      n_ctx = 8192,
+      n_batch = 512,
+      n_threads = 8,
       n_gpu_layers = 0, # Explicitly set to 0 for CPU-only
-      temperature = 0.1, # More deterministic for factual answers
-      repeat_penalty = 1.1, # Less aggressive penalty
+      temperature = 0.1, # [0-1] 0.1 is more deterministic for factual answers
+      repeat_penalty = 1.1, # Repeat penalty
       verbose = False,
     )
   except Exception as e:
@@ -270,18 +319,26 @@ Se i documenti contengono informazioni sufficienti per rispondere, fornisci una 
     start_time = time.time()
     response = llm(
       prompt,
-      #max_tokens = 768,
-      #max_tokens = Config.MAX_TOKENS
       max_tokens = Config.MAX_TOKENS_IN_ANSWER,
-      echo = False, # TODO: False! WHAT DOES THIS DO? DEBUG?
+      echo = False, # Do not repet prompt in answer
       stream = False, # Ensure we're not streaming unnecessarily
     )
-    logger.debug(f"--- prompt: {prompt}")
-    logger.debug(r"--- query llm: {%.1f} seconds ---" % (time.time() - start_time))
-    logger.debug(f"--- finish reason: {response["choices"][0]["finish_reason"]} ---")
+    end_time = time.time()
+    total_time = end_time - start_time
+    finish_reason = response["choices"][0]["finish_reason"]
     answer = response['choices'][0]['text'].strip()
+    logger.debug(f"<DBG> prompt: {prompt}")
+    logger.debug(r"<DBG> query llm: {%.1f} seconds" % total_time)
+    logger.debug(f"<DBG> finish reason: {finish_reason}")
     logger.info(f"response to query: {answer}")
-    return {"response": answer}
+    return JSONResponse(
+      status_code = 200,
+      content = {
+        "response": answer,
+        "total_time": round(total_time, 1),
+        "finish_reason": finish_reason,
+      }
+    )
   except Exception as e:
     logger.error(f"error queryng LLM: {str(e)}") # TODO: always logger.error before return 500 ?
     return JSONResponse(

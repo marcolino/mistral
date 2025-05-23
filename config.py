@@ -38,4 +38,4 @@ class Config:
   CHUNK_OVERLAP = 40 # Number of overlapping tokens between chunks
   FAISS_K_PROTOTYPE = 3 # Number of nearest neighbors to retrieve
   DISTANCE_THRESHOLD = 10.0 #0.85 # For L2 distance (default in FAISS IndexFlatL2) for similarity search
-  MAX_TOKENS_IN_ANSWER = 150 # Maximum number of tokens in the answer (150 forces brevity)
+  MAX_TOKENS_IN_ANSWER = 250 # Maximum number of tokens in the answer (150 forces brevity)

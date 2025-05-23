@@ -1,13 +1,39 @@
+body {
+  font-size: 1.3em;
+}
+input, textarea, select, button {
+  font-size: inherit;
+  border-radius: 3px;
+  border-width: 1px;
+  border-color: #888888;
+}
+#submit {
+  color: #FF3D00;
+}
+#info {
+  margin: 10px;
+  font-size: 0.8em;
+  font-style: italic;
+}
+#form {
+  margin: 10px;
+}
+#result {
+  margin: 10px;
+}
 #loading {
+  margin: 10px;
   visibility: hidden;
-  width: 32px;
-  height: 32px;
-  border: 5px solid #FFF;
+  width: 50px;
+  height: 50px;
+  border: 7px solid #FFF;
+  border-left-color: #FF3D00;
   border-bottom-color: #FF3D00;
-  border-radius: 50%;
+  border-right-color: #FF3D00;
+  border-radius: 175%;
   display: inline-block;
   box-sizing: border-box;
-  animation: rotation 1s linear infinite;
+  animation: rotation 1.5s linear infinite;
 }
 @keyframes rotation {
   0% {
